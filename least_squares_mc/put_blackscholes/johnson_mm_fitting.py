@@ -211,7 +211,7 @@ def sub_mom(g,d):
         m = 0
         # -----INNER WHILE loop evaluates infinite series:-----
         stop_inn = 0
-        
+        break_out = 0 ### ADDING THIS !!!!!!!!!!!!!!!
         while (stop_inn==0):
             m = m + 1
             if (m > limit):
