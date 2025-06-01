@@ -40,7 +40,7 @@ def sub_sbfit(xbar,sigma,rtb1,b2):
     x = half*b1 + one
     y = abs(rb1)*np.sqrt(quart*b1+one)
     u = (x+y)**(one/three)
-    w = u + one/u - one
+    w = u + (x-y)**(one/three) - one # u + one/u - one BEFORE !!!!!
     f = w*w*(three+w*(two+w)) - three
     e = (b2-e)/(f-e)
     if (abs(rb1)>tol):
@@ -211,7 +211,7 @@ def sub_mom(g,d):
         m = 0
         # -----INNER WHILE loop evaluates infinite series:-----
         stop_inn = 0
-        break_out = 0 ### ADDING THIS !!!!!!!!!!!!!!!
+        break_out = 0 ### ADDING THIS !!!!!!!!!!!!!!!!!!
         while (stop_inn==0):
             m = m + 1
             if (m > limit):
@@ -520,7 +520,7 @@ def f_johnson_M(mu,sd,skew,kurt):
     elif ifault == 1:
         msg = 'Negative SD'
     elif ifault == 2:
-        msg = '(b2 < b1+two)'
+        msg = '(b2 < b1+one)' # Instead of b2 < b1+two originally (which is false !!!!)
     else:
         msg = 'SB failure, SL or ST used instead'
     
