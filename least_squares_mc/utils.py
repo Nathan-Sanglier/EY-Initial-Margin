@@ -25,11 +25,21 @@ def gen_mtm(S_paths, r, sigma, K, T, time_grid):
     N   = S_paths.shape[1]-1
     mtm = np.zeros((M, N+1))
     for i in range(N+1):
-        d1          = (np.log(S_paths[:, i]/K) + (r + 0.5*sigma**2)*(T-time_grid[i])) / (sigma*np.sqrt(T-time_grid[i]))
-        d2          = d1 - sigma*np.sqrt(T-time_grid[i])
-        mtm[:, i]   = K*beta(T-time_grid[i], r)*norm.cdf(-d2) - S_paths[:, i]*norm.cdf(-d1)
+        if time_grid[i] == T:
+            mtm[:, i]   = np.maximum(S_paths[:, i]-K, 0)
+        else:
+            d1          = (np.log(S_paths[:, i]/K) + (r + 0.5*sigma**2)*(T-time_grid[i])) / (sigma*np.sqrt(T-time_grid[i]))
+            d2          = d1 - sigma*np.sqrt(T-time_grid[i])
+            mtm[:, i]   = K*beta(T-time_grid[i], r)*norm.cdf(-d2) - S_paths[:, i]*norm.cdf(-d1)
         
     return mtm
+
+def gen_mtmdiff(mtm_paths, ind_delta):
+    N               = mtm_paths.shape[1] - 1
+    inds_offset     = np.clip(np.arange(N+1) + ind_delta, 0, N)
+    mtmdiff_paths   = mtm_paths[:, inds_offset] - mtm_paths
+    mtmdiff_paths   = mtmdiff_paths[:, :-1]
+    return mtmdiff_paths
 
 def get_mtmdiff_nmc(M_in, S, mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid):
     gen_riskfactors_in = lambda S0, M, N: gen_riskfactors(S0, r, sigma, dt, M, N)
@@ -37,8 +47,11 @@ def get_mtmdiff_nmc(M_in, S, mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_
     M               = S.shape[0]
     mtmdiff         = np.zeros((M, M_in))
     ind_tdelta      = ind_tref + ind_delta
+    if ind_tdelta >= len(time_grid):
+        ind_tdelta = len(time_grid) - 1
+    ind_offset      = ind_tdelta - ind_tref
     for m in range(M):
-        S_paths_nested  = gen_riskfactors_in(S[m], M_in, ind_delta)
+        S_paths_nested  = gen_riskfactors_in(S[m], M_in, ind_offset)
         mtm_vals_nested = gen_mtm_in(S_paths_nested[:, -1:], time_grid[ind_tdelta:ind_tdelta+1])
         mtmdiff[m, :]   = mtm_vals_nested[:, 0] - mtm[m]
 
