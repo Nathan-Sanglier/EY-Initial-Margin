@@ -1,4 +1,5 @@
-import numpy as np
+import  numpy       as np
+import  warnings
 
 
 ################################################################
@@ -491,6 +492,8 @@ def f_johnson_M(mu,sd,skew,kurt):
     # Coded in Python by MAX PIERINI © 2021 EpiData.it (info@epidata.it) #
     ######################################################################
     """
+    warnings.filterwarnings('ignore')
+
     if not np.all((np.isscalar(mu), 
                    np.isscalar(sd),
                    np.isscalar(skew),

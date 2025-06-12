@@ -143,12 +143,15 @@ def get_skewkurt(muhat, maskhat=None):
 
     if maskhat is None:
         maskhat = np.ones_like(muhat, dtype=bool)
-    skewhat = get_skew(muhat[:, 0], muhat[:, 1])
-    kurthat = get_kurt(muhat[:, 0], muhat[:, 2])
-
-    mask_skewhat    = (maskhat[:, 0])&(maskhat[:, 1])
-    mask_kurthat    = (maskhat[:, 0])&(maskhat[:, 2])
-    mask_tothat     = (mask_skewhat)&(mask_kurthat)
+    
+    mask_skewhat            = (maskhat[:, 0])&(maskhat[:, 1])
+    skewhat                 = np.nan * np.ones(muhat.shape[0])
+    skewhat[mask_skewhat]   = get_skew(muhat[mask_skewhat, 0], muhat[mask_skewhat, 1])
+    mask_kurthat            = (maskhat[:, 0])&(maskhat[:, 2])
+    kurthat                 = np.nan * np.ones(muhat.shape[0])
+    kurthat[mask_kurthat]   = get_kurt(muhat[mask_kurthat, 0], muhat[mask_kurthat, 2])
+    
+    mask_tothat = (mask_skewhat)&(mask_kurthat)
     
     return skewhat, kurthat, mask_skewhat, mask_kurthat, mask_tothat
 
@@ -178,6 +181,45 @@ def moment_matching_johnson(mu1rawhat, mu2hat, skewhat, kurthat, mask_tothat, PR
                     jparamshat[i]   = jcoeffs
                     jtypehat[i]     = jtypes_map[jf]
     return jparamshat, jtypehat, mask_hat
+
+
+def percentile_matching_johnson(mtm, S_train, mtm_train, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid, Nnmc, z):
+    jtypes_map  = {'SL': 1, 'SU': 2, 'SB': 3, 'SN': 4, 'ST': 5}
+    percents    = norm.cdf([3*z, z, -z, -3*z])
+    inds        = (mtm_train[:, None] == mtm).argmax(axis=0)
+    mtmdiff_nmc = get_mtmdiff_nmc(Nnmc, S_train[inds], mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid)
+    quant_nmc   = np.zeros((len(percents), mtm.shape[0]))
+    for i, perc in enumerate(percents):
+        quant_nmc[i, :] = np.quantile(mtmdiff_nmc, perc, method='inverted_cdf', axis=1)
+        
+    m = quant_nmc[0, :] - quant_nmc[1, :]
+    n = quant_nmc[2, :] - quant_nmc[3, :]
+    p = quant_nmc[1, :] - quant_nmc[2, :]
+    d = (m*n)/p**2
+
+    conds       = [d<0.999, d>1.001, (d>=0.999)&(d<=1.001)]
+    conds_jtype = [jtypes_map['SB'], jtypes_map['SU'], jtypes_map['SL']]
+    jtypehat    = np.select(conds, conds_jtype)
+
+    jparamshat  = np.zeros((len(jtypehat), 4))
+    for i, jtype in enumerate(jtypehat):
+        if jtype == jtypes_map['SU']:
+            jparamshat[i, 1] = 2*z/np.arccosh(1/2*(m[i]/p[i] + n[i]/p[i]))
+            jparamshat[i, 0] = jparamshat[i, 1] * np.arcsinh((n[i]/p[i] - m[i]/p[i]) / (2*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1)))
+            jparamshat[i, 2] = (quant_nmc[1, i] + quant_nmc[2, i])/2 + p[i]*(n[i]/p[i] - m[i]/p[i])/(2*(m[i]/p[i] + n[i]/p[i] - 2))
+            jparamshat[i, 3] = 2*p[i]*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1) / ((m[i]/p[i] + n[i]/p[i] - 2) * np.sqrt(m[i]/p[i] + n[i]/p[i] + 2))
+        elif jtype == jtypes_map['SB']:
+            jparamshat[i, 1] = z/np.arccosh(1/2*np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i])))
+            jparamshat[i, 0] = jparamshat[i, 1] * np.arcsinh((p[i]/n[i] - p[i]/m[i]) * np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i]) - 4) / (2*(p[i]/m[i] * p[i]/n[i] - 1)))
+            jparamshat[i, 3] = p[i]*np.sqrt(((1+p[i]/m[i]) * (1+p[i]/n[i]) - 2)**2 - 4) / (p[i]/m[i]*p[i]/n[i] - 1)
+            jparamshat[i, 2] = (quant_nmc[1, i] + quant_nmc[2, i])/2 - jparamshat[i, 3]/2 + p[i]*(p[i]/n[i] - p[i]/m[i])/(2*(p[i]/m[i] * p[i]/n[i] - 1))
+        elif jtype == jtypes_map['SL']:
+            jparamshat[i, 1] = 2*z/np.log(m[i]/p[i])
+            jparamshat[i, 0] = jparamshat[i, 1] * np.log((m[i]/p[i] - 1) / (p[i] * np.sqrt(m[i]/p[i])))
+            jparamshat[i, 2] = (quant_nmc[1, i] + quant_nmc[2, i])/2 - p[i]/2 * (m[i]/p[i] + 1) / (m[i]/p[i] - 1)
+            jparamshat[i, 3] = 1
+
+    return jparamshat, jtypehat
 
 
 def get_quantile_johnson(jparamshat, jtypehat, alpha):
@@ -217,12 +259,12 @@ def get_pdf_johnson(jparamshat, jtypehat, mtmdiff_pdf):
 
 
 def get_quantile_normal(mu1rawhat, mu2hat, alpha):
-    quanthat = norm.ppf(alpha, loc=mu1rawhat, scale=np.sqrt(mu2hat.reshape(-1, 1)))
+    quanthat = norm.ppf(alpha, loc=mu1rawhat.reshape(-1, 1), scale=np.sqrt(mu2hat.reshape(-1, 1)))
     return quanthat
 
 
 def get_pdf_normal(mu1rawhat, mu2hat, mtmdiff_pdf):
-    pdfhat = norm.pdf(mtmdiff_pdf, loc=mu1rawhat, scale=np.sqrt(mu2hat.reshape(-1, 1)))
+    pdfhat = norm.pdf(mtmdiff_pdf, loc=mu1rawhat.reshape(-1, 1), scale=np.sqrt(mu2hat.reshape(-1, 1)))
     return pdfhat
 
 
@@ -272,7 +314,6 @@ def get_var_put(S, mtm, r, sigma, K, T, alpha, delta, ind_tref, time_grid):
     ind_delta = int(delta/(time_grid[1]-time_grid[0]))
     ind_tdelta  = ind_tref + ind_delta
     var_S       = S * exp((r-0.5*sigma**2)*delta + sigma*sqrt(delta)*norm.ppf(1-alpha))
-
     temp        = gen_mtm(var_S.reshape(-1, 1), r, sigma, K, T, time_grid[ind_tdelta:(ind_tdelta+1)]).reshape(-1)
     varhat      = temp - mtm
     return varhat
