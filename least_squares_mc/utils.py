@@ -26,7 +26,7 @@ def gen_mtm(S_paths, r, sigma, K, T, time_grid):
     mtm = np.zeros((M, N+1))
     for i in range(N+1):
         if time_grid[i] == T:
-            mtm[:, i]   = np.maximum(S_paths[:, i]-K, 0)
+            mtm[:, i]   = np.maximum(K-S_paths[:, i], 0)
         else:
             d1          = (np.log(S_paths[:, i]/K) + (r + 0.5*sigma**2)*(T-time_grid[i])) / (sigma*np.sqrt(T-time_grid[i]))
             d2          = d1 - sigma*np.sqrt(T-time_grid[i])
@@ -34,12 +34,6 @@ def gen_mtm(S_paths, r, sigma, K, T, time_grid):
         
     return mtm
 
-def gen_mtmdiff(mtm_paths, ind_delta):
-    N               = mtm_paths.shape[1] - 1
-    inds_offset     = np.clip(np.arange(N+1) + ind_delta, 0, N)
-    mtmdiff_paths   = mtm_paths[:, inds_offset] - mtm_paths
-    mtmdiff_paths   = mtmdiff_paths[:, :-1]
-    return mtmdiff_paths
 
 def get_mtmdiff_nmc(M_in, S, mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid):
     gen_riskfactors_in = lambda S0, M, N: gen_riskfactors(S0, r, sigma, dt, M, N)
@@ -56,6 +50,13 @@ def get_mtmdiff_nmc(M_in, S, mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_
         mtmdiff[m, :]   = mtm_vals_nested[:, 0] - mtm[m]
 
     return mtmdiff
+
+def get_mtmdiff(mtm_paths, ind_delta):
+    N               = mtm_paths.shape[1] - 1
+    inds_offset     = np.clip(np.arange(N+1) + ind_delta, 0, N)
+    mtmdiff_paths   = mtm_paths[:, inds_offset] - mtm_paths
+    mtmdiff_paths   = mtmdiff_paths[:, :-1]
+    return mtmdiff_paths
 
 
 def get_basis(mtm, basis_type, order):
@@ -210,29 +211,42 @@ def percentile_matching_johnson(mtm, S_train, mtm_train, r, sigma, dt, K, T, ind
     p = quant_nmc[1, :] - quant_nmc[2, :]
     d = (m*n)/p**2
 
-    conds       = [d<0.999, d>1.001, (d>=0.999)&(d<=1.001)]
+    conds       = [(d<0.999)|((d<1)&(m<=p)), (d>1.001)|((d>1)&(m<=p)), (d>=0.999)&(d<=1.001)&(m>p)]
     conds_jtype = [jtypes_map['SB'], jtypes_map['SU'], jtypes_map['SL']]
     jtypehat    = np.select(conds, conds_jtype)
-
+    mask_hat    = np.zeros_like(jtypehat, dtype=bool)
     jparamshat  = np.zeros((len(jtypehat), 4))
     for i, jtype in enumerate(jtypehat):
         if jtype == jtypes_map['SU']:
-            jparamshat[i, 1] = 2*z/np.arccosh(1/2*(m[i]/p[i] + n[i]/p[i]))
-            jparamshat[i, 0] = jparamshat[i, 1] * np.arcsinh((n[i]/p[i] - m[i]/p[i]) / (2*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1)))
-            jparamshat[i, 2] = (quant_nmc[1, i] + quant_nmc[2, i])/2 + p[i]*(n[i]/p[i] - m[i]/p[i])/(2*(m[i]/p[i] + n[i]/p[i] - 2))
-            jparamshat[i, 3] = 2*p[i]*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1) / ((m[i]/p[i] + n[i]/p[i] - 2) * np.sqrt(m[i]/p[i] + n[i]/p[i] + 2))
+            jparamshat[i, 1]    = 2*z/np.arccosh(1/2*(m[i]/p[i] + n[i]/p[i]))
+            jparamshat[i, 0]    = jparamshat[i, 1] * np.arcsinh((n[i]/p[i] - m[i]/p[i]) / (2*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1)))
+            jparamshat[i, 2]    = (quant_nmc[1, i] + quant_nmc[2, i])/2 + p[i]*(n[i]/p[i] - m[i]/p[i])/(2*(m[i]/p[i] + n[i]/p[i] - 2))
+            jparamshat[i, 3]    = 2*p[i]*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1) / ((m[i]/p[i] + n[i]/p[i] - 2) * np.sqrt(m[i]/p[i] + n[i]/p[i] + 2))
+            mask_hat[i]         = True
         elif jtype == jtypes_map['SB']:
-            jparamshat[i, 1] = z/np.arccosh(1/2*np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i])))
-            jparamshat[i, 0] = jparamshat[i, 1] * np.arcsinh((p[i]/n[i] - p[i]/m[i]) * np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i]) - 4) / (2*(p[i]/m[i] * p[i]/n[i] - 1)))
-            jparamshat[i, 3] = p[i]*np.sqrt(((1+p[i]/m[i]) * (1+p[i]/n[i]) - 2)**2 - 4) / (p[i]/m[i]*p[i]/n[i] - 1)
-            jparamshat[i, 2] = (quant_nmc[1, i] + quant_nmc[2, i])/2 - jparamshat[i, 3]/2 + p[i]*(p[i]/n[i] - p[i]/m[i])/(2*(p[i]/m[i] * p[i]/n[i] - 1))
+            if np.arccosh(1/2*np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i]))) == 0 or m[i] == 0 or n[i] == 0 or p[i] == 0:
+                print(f'Warning: impossible region for support point n°{i} - d = {d[i]} (SB): m = {m[i]} ; n = {n[i]} ; p = {p[i]}')
+                jparamshat[i]  = np.repeat(np.nan, 4)
+                jtypehat[i]    = None
+            else:
+                jparamshat[i, 1]    = z/np.arccosh(1/2*np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i])))
+                jparamshat[i, 0]    = jparamshat[i, 1] * np.arcsinh((p[i]/n[i] - p[i]/m[i]) * np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i]) - 4) / (2*(p[i]/m[i] * p[i]/n[i] - 1)))
+                jparamshat[i, 3]    = p[i]*np.sqrt(((1+p[i]/m[i]) * (1+p[i]/n[i]) - 2)**2 - 4) / (p[i]/m[i]*p[i]/n[i] - 1)
+                jparamshat[i, 2]    = (quant_nmc[1, i] + quant_nmc[2, i])/2 - jparamshat[i, 3]/2 + p[i]*(p[i]/n[i] - p[i]/m[i])/(2*(p[i]/m[i] * p[i]/n[i] - 1))
+                mask_hat[i]         = True
         elif jtype == jtypes_map['SL']:
-            jparamshat[i, 1] = 2*z/np.log(m[i]/p[i])
-            jparamshat[i, 0] = jparamshat[i, 1] * np.log((m[i]/p[i] - 1) / (p[i] * np.sqrt(m[i]/p[i])))
-            jparamshat[i, 2] = (quant_nmc[1, i] + quant_nmc[2, i])/2 - p[i]/2 * (m[i]/p[i] + 1) / (m[i]/p[i] - 1)
-            jparamshat[i, 3] = 1
+            if m[i] < p[i]:
+                print(f'Warning: impossible region for support point n°{i} - d = {d[i]} (SL): m = {m[i]} < p = {p[i]}')
+                jparamshat[i]  = np.repeat(np.nan, 4)
+                jtypehat[i]    = None
+            else:
+                jparamshat[i, 1]    = 2*z/np.log(m[i]/p[i])
+                jparamshat[i, 0]    = jparamshat[i, 1] * np.log((m[i]/p[i] - 1) / (p[i] * np.sqrt(m[i]/p[i])))
+                jparamshat[i, 2]    = (quant_nmc[1, i] + quant_nmc[2, i])/2 - p[i]/2 * (m[i]/p[i] + 1) / (m[i]/p[i] - 1)
+                jparamshat[i, 3]    = 1
+                mask_hat[i]         = True
 
-    return jparamshat, jtypehat
+    return jparamshat, jtypehat, mask_hat
 
 
 def get_quantile_johnson(jparamshat, jtypehat, alpha):
@@ -323,10 +337,24 @@ def get_var_jlsmc(mtm_supp, quanthat_supp, mtm_pred_list, setting):
     return yhat_pred_list
 
 
+'''
 def get_var_put(S, mtm, r, sigma, K, T, alpha, delta, ind_tref, time_grid):
     ind_delta = int(delta/(time_grid[1]-time_grid[0]))
     ind_tdelta  = ind_tref + ind_delta
     var_S       = S * exp((r-0.5*sigma**2)*delta + sigma*sqrt(delta)*norm.ppf(1-alpha))
+    temp        = gen_mtm(var_S.reshape(-1, 1), r, sigma, K, T, time_grid[ind_tdelta:(ind_tdelta+1)]).reshape(-1)
+    varhat      = temp - mtm
+    return varhat
+'''
+
+
+def get_var_put(S, mtm, r, sigma, K, T, alpha, delta, ind_tref, time_grid):
+    ind_delta   = int(delta/(time_grid[1]-time_grid[0]))
+    ind_tdelta  = ind_tref + ind_delta 
+    if ind_tdelta >= len(time_grid):
+        ind_tdelta = len(time_grid) - 1
+    time_gap    = time_grid[ind_tdelta] - time_grid[ind_tref]
+    var_S       = S * exp((r-0.5*sigma**2)*time_gap + sigma*sqrt(time_gap)*norm.ppf(1-alpha))
     temp        = gen_mtm(var_S.reshape(-1, 1), r, sigma, K, T, time_grid[ind_tdelta:(ind_tdelta+1)]).reshape(-1)
     varhat      = temp - mtm
     return varhat
