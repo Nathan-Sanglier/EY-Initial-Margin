@@ -213,19 +213,24 @@ def percentile_matching_johnson(mtm, S_train, mtm_train, r, sigma, dt, K, T, ind
 
     conds       = [(d<0.999)|((d<1)&(m<=p)), (d>1.001)|((d>1)&(m<=p)), (d>=0.999)&(d<=1.001)&(m>p)]
     conds_jtype = [jtypes_map['SB'], jtypes_map['SU'], jtypes_map['SL']]
-    jtypehat    = np.select(conds, conds_jtype)
+    jtypehat    = np.select(conds, conds_jtype).astype(object)
     mask_hat    = np.zeros_like(jtypehat, dtype=bool)
     jparamshat  = np.zeros((len(jtypehat), 4))
     for i, jtype in enumerate(jtypehat):
         if jtype == jtypes_map['SU']:
-            jparamshat[i, 1]    = 2*z/np.arccosh(1/2*(m[i]/p[i] + n[i]/p[i]))
-            jparamshat[i, 0]    = jparamshat[i, 1] * np.arcsinh((n[i]/p[i] - m[i]/p[i]) / (2*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1)))
-            jparamshat[i, 2]    = (quant_nmc[1, i] + quant_nmc[2, i])/2 + p[i]*(n[i]/p[i] - m[i]/p[i])/(2*(m[i]/p[i] + n[i]/p[i] - 2))
-            jparamshat[i, 3]    = 2*p[i]*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1) / ((m[i]/p[i] + n[i]/p[i] - 2) * np.sqrt(m[i]/p[i] + n[i]/p[i] + 2))
-            mask_hat[i]         = True
+            if p[i] == 0:
+                # print(f'Warning: impossible region for support point n°{i} - d = {d[i]:.4f} (SU): p = {p[i]:.4f}')
+                jparamshat[i]  = np.repeat(np.nan, 4)
+                jtypehat[i]    = None
+            else:
+                jparamshat[i, 1]    = 2*z/np.arccosh(1/2*(m[i]/p[i] + n[i]/p[i]))
+                jparamshat[i, 0]    = jparamshat[i, 1] * np.arcsinh((n[i]/p[i] - m[i]/p[i]) / (2*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1)))
+                jparamshat[i, 2]    = (quant_nmc[1, i] + quant_nmc[2, i])/2 + p[i]*(n[i]/p[i] - m[i]/p[i])/(2*(m[i]/p[i] + n[i]/p[i] - 2))
+                jparamshat[i, 3]    = 2*p[i]*np.sqrt(m[i]/p[i] * n[i]/p[i] - 1) / ((m[i]/p[i] + n[i]/p[i] - 2) * np.sqrt(m[i]/p[i] + n[i]/p[i] + 2))
+                mask_hat[i]         = True
         elif jtype == jtypes_map['SB']:
-            if np.arccosh(1/2*np.sqrt((1+p[i]/m[i]) * (1+p[i]/n[i]))) == 0 or m[i] == 0 or n[i] == 0 or p[i] == 0:
-                print(f'Warning: impossible region for support point n°{i} - d = {d[i]} (SB): m = {m[i]} ; n = {n[i]} ; p = {p[i]}')
+            if (m[i] == 0) or (n[i] == 0):
+                # print(f'Warning: impossible region for support point n°{i} - d = {d[i]} (SB): m = {m[i]} ; n = {n[i]}')
                 jparamshat[i]  = np.repeat(np.nan, 4)
                 jtypehat[i]    = None
             else:
@@ -235,8 +240,8 @@ def percentile_matching_johnson(mtm, S_train, mtm_train, r, sigma, dt, K, T, ind
                 jparamshat[i, 2]    = (quant_nmc[1, i] + quant_nmc[2, i])/2 - jparamshat[i, 3]/2 + p[i]*(p[i]/n[i] - p[i]/m[i])/(2*(p[i]/m[i] * p[i]/n[i] - 1))
                 mask_hat[i]         = True
         elif jtype == jtypes_map['SL']:
-            if m[i] < p[i]:
-                print(f'Warning: impossible region for support point n°{i} - d = {d[i]} (SL): m = {m[i]} < p = {p[i]}')
+            if (m[i] < p[i]) or (p[i] == 0):
+                # print(f'Warning: impossible region for support point n°{i} - d = {d[i]} (SL): m = {m[i]} ; p = {p[i]}')
                 jparamshat[i]  = np.repeat(np.nan, 4)
                 jtypehat[i]    = None
             else:
