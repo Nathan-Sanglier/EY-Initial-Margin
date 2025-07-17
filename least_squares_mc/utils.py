@@ -8,45 +8,108 @@ from    math                                        import  sqrt, exp
 from    sklearn.linear_model                        import  LinearRegression, Ridge, HuberRegressor
 from    sklearn.neighbors                           import  KNeighborsRegressor
 from    as99                                        import  f_johnson_M
+from    scipy.signal                                import  lfilter
+from    scipy.optimize                              import  root as root_finder
 
-def beta(t, r):
-    return np.exp(-r*t)
 
-def gen_riskfactors(S0, r, sigma, dt, M, N):
-    paths           = np.zeros((M, N+1))
-    paths[:, 0]     = S0
-    Z               = np.random.normal(0, 1, size=(M, N))
-    increments      = np.exp((r-0.5*sigma**2)*dt + sigma*np.sqrt(dt)*Z)
-    paths[:, 1:]    = S0 * np.cumprod(increments, axis=1)
+def obs_yield_curve(T, C1, C2, C3):
+    return C1 + C2*np.exp(C3*T)
+
+def d1_obs_yield_curve(T, C2, C3):
+    return C2 * C3 * np.exp(C3*T)
+
+def d2_obs_yield_curve(T, C2, C3):
+    return C3 * d1_obs_yield_curve(T, C2, C3)
+
+def obs_inst_fwd_rate(T, C1, C2, C3):
+    return d1_obs_yield_curve(T, C2, C3)*T + obs_yield_curve(T, C1, C2, C3)
+
+def d1_obs_inst_fwd_rate(T, C2, C3):
+    return d2_obs_yield_curve(T, C2, C3)*T + 2*d1_obs_yield_curve(T, C2, C3)
+
+def theta(t, k, sigma, C1, C2, C3):
+    return d1_obs_inst_fwd_rate(t, C2, C3) + k*obs_inst_fwd_rate(t, C1, C2, C3) + sigma**2/(2*k) * (1 - np.exp(-2*k*t))
+
+def obs_zc_price(T, C1, C2, C3):
+    return np.exp(-obs_yield_curve(T, C1, C2, C3) * T)
+
+def beta(t, k, sigma, C1, C2, C3):
+    return obs_yield_curve(t, C1, C2, C3) + sigma**2/(2*k**2) * (1 - np.exp(-k*t))**2
+
+def gen_riskfactors(r0, k, sigma, C1, C2, C3, dt, M, time_grid):
+    N           = len(time_grid) - 1
+    beta_vals   = beta(time_grid, k, sigma, C1, C2, C3)
+    m_vals      = beta_vals[1:] - beta_vals[:-1]*exp(-k*dt)
+    X           = m_vals[None, :] + np.sqrt(sigma**2/(2*k)*(1-np.exp(-2*k*dt))) * np.random.randn(M, N)
+    y, _        = lfilter(b=[1.0], a=[1.0, -exp(-k*dt)], x=X, axis=1, zi=np.full((M, 1), r0))
+    paths       = np.concatenate([r0 * np.ones((M, 1)), y], axis=1)
+
     return paths
 
-def gen_mtm(S_paths, r, sigma, K, T, time_grid):
-    M   = S_paths.shape[0]
-    N   = S_paths.shape[1]-1
-    mtm = np.zeros((M, N+1))
+def gen_zc_mtm(rf_paths, k, sigma, C1, C2, C3, T, time_grid):
+
+    def n(t):
+        return (1-np.exp(-k*(T-t)))/k
+    def m(t):
+        return np.log(obs_zc_price(T, C1, C2, C3)/obs_zc_price(t, C1, C2, C3)) + n(t)*obs_yield_curve(t, C1, C2, C3) - sigma**2/(4*k)*n(t)**2*(1 - np.exp(-2*k*t))
+    
+    return np.exp(m(time_grid) - n(time_grid)*rf_paths)
+
+
+def gen_put_zc_mtm(zc1_paths, zc2_paths, k, sigma, K, T, S, time_grid):
+    M           = zc1_paths.shape[0]
+    N           = zc1_paths.shape[1]-1
+    mtm         = np.zeros((M, N+1))
+
+    def var_integral(t, T, S):
+        return sigma/k * (1 -exp(-k*(S-T))) * np.sqrt((1 - np.exp(-2*k*(T-t)))/(2*k))
+
     for i in range(N+1):
         if time_grid[i] == T:
-            mtm[:, i]   = np.maximum(K-S_paths[:, i], 0)
+            mtm[:, i]   = np.maximum(K-zc2_paths[:, i], 0)
         else:
-            d1          = (np.log(S_paths[:, i]/K) + (r + 0.5*sigma**2)*(T-time_grid[i])) / (sigma*np.sqrt(T-time_grid[i]))
-            d2          = d1 - sigma*np.sqrt(T-time_grid[i])
-            mtm[:, i]   = K*beta(T-time_grid[i], r)*norm.cdf(-d2) - S_paths[:, i]*norm.cdf(-d1)
+            var         = var_integral(time_grid[i], T, S)
+            d1          = (np.log(zc2_paths[:, i]/(K*zc1_paths[:, i])) + 0.5*var) / np.sqrt(var)
+            d2          = d1 - np.sqrt(var)
+            mtm[:, i]   = K*zc1_paths[:, i]*norm.cdf(-d2) - zc2_paths[:, i]*norm.cdf(-d1)
         
     return mtm
 
+def gen_mtm(rf_paths, k, sigma, R, C1, C2, C3, dt, T, time_grid, fixing_grid, notional):
+    c = np.concatenate([dt*R*np.ones(len(fixing_grid)-1), [1+dt*R]], axis=0)
+    K = 1
 
-def get_mtmdiff_nmc(M_in, S, mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid):
-    gen_riskfactors_in = lambda S0, M, N: gen_riskfactors(S0, r, sigma, dt, M, N)
-    gen_mtm_in         = lambda S_paths, time_grid: gen_mtm(S_paths, r, sigma, K, T, time_grid)
-    M               = S.shape[0]
+    def psi(t, Tfix):
+        return sigma/k * (exp(-k*t) - np.exp(-k*Tfix))
+    def mu(t, Tfix):
+        int1 = sigma**2/k**3 * (1 + np.exp(-k*Tfix) - exp(-k*t) - np.exp(-k*(Tfix-t)) + 1/4*(np.exp(-2*k*(Tfix-t)) - 1))
+        int2 = sigma**2/k**3 * (np.exp(-k*(Tfix-t)) - np.exp(-k*Tfix) - 1 + exp(-k*t) - np.exp(-k*(Tfix+T-2*t)) + np.exp(-k*(Tfix+T)) + exp(-k*(T-t)) - exp(-k*(t+T)))
+        return np.log(obs_zc_price(Tfix, C1, C2, C3)/ obs_zc_price(t, C1, C2, C3)) - int1 + int2
+    
+    mu_vals     = mu(T, fixing_grid)
+    psi_vals    = psi(T, fixing_grid)
+    f           = lambda y: np.sum(c*np.exp(mu_vals - psi_vals*y)) - K
+    ybar        = root_finder(f, 0, method='hybr').x
+    Kjam        = c*np.exp(mu_vals - psi_vals*ybar)
+    zc1_paths   = gen_zc_mtm(rf_paths, k, sigma, C1, C2, C3, T, time_grid)
+    sum         = np.zeros_like(rf_paths)
+    for j in range(len(fixing_grid)):
+        zc2_paths   = gen_zc_mtm(rf_paths, k, sigma, C1, C2, C3, fixing_grid[j], time_grid)
+        sum         += c[j] * gen_put_zc_mtm(zc1_paths, zc2_paths, k, sigma, Kjam[j]/c[j], T, fixing_grid[j], time_grid)
+    return notional * sum
+
+
+def get_mtmdiff_nmc(M_in, rf, mtm, k, sigma, R, C1, C2, C3, dt, T, ind_tref, ind_delta, time_grid, fixing_grid, notional):
+    gen_riskfactors_in = lambda r0, M, time_grid: gen_riskfactors(r0, k, sigma, C1, C2, C3, dt, M, time_grid)
+    gen_mtm_in         = lambda rf_paths, time_grid: gen_mtm(rf_paths, k, sigma, R, C1, C2, C3, dt, T, time_grid, fixing_grid, notional)
+    M               = rf.shape[0]
     mtmdiff         = np.zeros((M, M_in))
     ind_tdelta      = ind_tref + ind_delta
     if ind_tdelta >= len(time_grid):
         ind_tdelta = len(time_grid) - 1
-    ind_offset      = ind_tdelta - ind_tref
     for m in range(M):
-        S_paths_nested  = gen_riskfactors_in(S[m], M_in, ind_offset)
-        mtm_vals_nested = gen_mtm_in(S_paths_nested[:, -1:], time_grid[ind_tdelta:ind_tdelta+1])
+        rf_paths_nested  = gen_riskfactors_in(rf[m], M_in, time_grid[ind_tref:ind_tdelta+1])
+        mtm_vals_nested = gen_mtm_in(rf_paths_nested[:, -1:], time_grid[ind_tdelta:ind_tdelta+1])
         mtmdiff[m, :]   = mtm_vals_nested[:, 0] - mtm[m]
 
     return mtmdiff
@@ -197,11 +260,11 @@ def moment_matching_johnson(mu1rawhat, mu2hat, skewhat, kurthat, mask_tothat, PR
     return jparamshat, jtypehat, mask_hat
 
 
-def percentile_matching_johnson(mtm, S_train, mtm_train, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid, Nnmc, z):
+def percentile_matching_johnson(mtm, rf_train, mtm_train, k, sigma, R, C1, C2, C3, dt, T, ind_tref, ind_delta, time_grid, fixing_grid, notional, Nnmc, z):
     jtypes_map  = {'SL': 1, 'SU': 2, 'SB': 3, 'SN': 4, 'ST': 5}
     percents    = norm.cdf([3*z, z, -z, -3*z])
     inds        = (mtm_train[:, None] == mtm).argmax(axis=0)
-    mtmdiff_nmc = get_mtmdiff_nmc(Nnmc, S_train[inds], mtm, r, sigma, dt, K, T, ind_tref, ind_delta, time_grid)
+    mtmdiff_nmc = get_mtmdiff_nmc(Nnmc, rf_train[inds], mtm, k, sigma, R, C1, C2, C3, dt, T, ind_tref, ind_delta, time_grid, fixing_grid, notional)
     quant_nmc   = np.zeros((len(percents), mtm.shape[0]))
     for i, perc in enumerate(percents):
         quant_nmc[i, :] = np.quantile(mtmdiff_nmc, perc, method='inverted_cdf', axis=1)
@@ -349,24 +412,16 @@ def get_var_jlsmc(mtm_supp, quanthat_supp, mtm_pred_list, setting):
     return yhat_pred_list
 
 
-'''
-def get_var_put(S, mtm, r, sigma, K, T, alpha, delta, ind_tref, time_grid):
-    ind_delta = int(delta/(time_grid[1]-time_grid[0]))
-    ind_tdelta  = ind_tref + ind_delta
-    var_S       = S * exp((r-0.5*sigma**2)*delta + sigma*sqrt(delta)*norm.ppf(1-alpha))
-    temp        = gen_mtm(var_S.reshape(-1, 1), r, sigma, K, T, time_grid[ind_tdelta:(ind_tdelta+1)]).reshape(-1)
-    varhat      = temp - mtm
-    return varhat
-'''
-
-
-def get_var_put(S, mtm, r, sigma, K, T, alpha, delta, ind_tref, time_grid):
+def get_var_swaption(rf, mtm, k, sigma, R, C1, C2, C3, dt, T, delta, alpha, ind_tref, time_grid, fixing_grid, notional):
     ind_delta   = int(delta/(time_grid[1]-time_grid[0]))
     ind_tdelta  = ind_tref + ind_delta 
     if ind_tdelta >= len(time_grid):
         ind_tdelta = len(time_grid) - 1
     time_gap    = time_grid[ind_tdelta] - time_grid[ind_tref]
-    var_S       = S * exp((r-0.5*sigma**2)*time_gap + sigma*sqrt(time_gap)*norm.ppf(1-alpha))
-    temp        = gen_mtm(var_S.reshape(-1, 1), r, sigma, K, T, time_grid[ind_tdelta:(ind_tdelta+1)]).reshape(-1)
+    mean_rf     = rf*exp(-k*delta) + beta(time_grid[ind_tdelta], k, sigma, C1, C2, C3) - beta(time_grid[ind_tref], k, sigma, C1, C2, C3) * exp(-k*time_gap)
+    variance_rf = sigma**2/(2*k) * (1 - np.exp(-2*k*time_gap))
+    var_rf      = mean_rf + np.sqrt(variance_rf)*norm.ppf(alpha)
+    temp        = gen_mtm(var_rf.reshape(-1, 1), k, sigma, R, C1, C2, C3, dt, T, time_grid[ind_tdelta:(ind_tdelta+1)], fixing_grid, notional).reshape(-1)
     varhat      = temp - mtm
+
     return varhat
