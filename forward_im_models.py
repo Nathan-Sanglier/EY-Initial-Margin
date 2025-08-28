@@ -1,10 +1,11 @@
 import  torch
-import  torch.nn            as      nn
-import  numpy               as      np
-from    abc                 import  ABC, abstractmethod
-from    utils               import  get_mtmdiff, get_centred_moms, get_quantile_normal, get_skewkurt, moment_matching_johnson, percentile_matching_johnson, get_quantile_johnson, get_mtmdiff_nmc
-from    regressors          import  RawMomentsRegressor, JohnsonSupportRegressor
-from    torch.utils.data    import  DataLoader, TensorDataset
+import  torch.nn                as      nn
+import  numpy                   as      np
+from    abc                     import  ABC, abstractmethod
+from    utils                   import  get_mtmdiff, get_centred_moms, get_quantile_normal, get_skewkurt, moment_matching_johnson, percentile_matching_johnson, get_quantile_johnson, get_mtmdiff_nmc
+from    regressors              import  RawMomentsRegressor, JohnsonSupportRegressor
+from    torch.utils.data        import  DataLoader, TensorDataset
+from    sklearn.preprocessing   import  StandardScaler
 
 
 class ForwardInitialMarginModel(ABC):
@@ -226,6 +227,7 @@ class NonLinearNN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
 class NeuralQuantileRegression(ForwardInitialMarginModel):
     '''
     Model that uses quantile regression over neural networks.
@@ -248,15 +250,22 @@ class NeuralQuantileRegression(ForwardInitialMarginModel):
 
     def fit(self, risk_factors_train_paths, mtm_train_paths):
         self.quantile_functions = []
+        self.scalers            = []
+        self.scalers_pred       = []
         mtmdiff_train_paths = get_mtmdiff(mtm_train_paths, self.mpor, self.time_grid)
         pinball_loss = lambda yhat, y: torch.maximum(y - yhat, torch.tensor(0.0))/(1-self.level) + yhat
         for i in range(len(self.time_grid.grid)-1, -1, -1): # from last to first timestep to leverage transfer learning
             if (i<len(self.time_grid.grid)-1) or (len(self.time_grid.grid) < mtm_train_paths.shape[1]):
                 X           = torch.tensor(risk_factors_train_paths[:, i].reshape(-1, 1), dtype=torch.float32)
-                X           = (X - X.mean()) / X.std() if X.std() > 0 else X
+                scaler      = StandardScaler()
+                X           = scaler.fit_transform(X, with_std=(X.std() > 0))
+                self.scalers.insert(0, scaler)
                 ones        = torch.ones(X.size(0), 1, dtype=torch.float32)
                 X           = torch.cat((ones, X), dim=1)
                 y           = torch.tensor(mtmdiff_train_paths[:, i].reshape(-1, 1), dtype=torch.float32)
+                scaler_pred = StandardScaler()
+                y           = scaler_pred.fit_transform(y, with_std=(y.std() > 0))
+                self.scalers_pred.insert(0, scaler_pred)
                 dataset     = TensorDataset(X, y)
                 dataloader  = DataLoader(dataset, batch_size=self.quantile_function_setting['batch_size'], shuffle=True)
                 model       = NonLinearNN(input_dim=2, n_neurons=self.quantile_function_setting['n_neurons'], n_hidden_layers=self.quantile_function_setting['n_hidden_layers'])
@@ -264,16 +273,29 @@ class NeuralQuantileRegression(ForwardInitialMarginModel):
                     model.load_state_dict(self.quantile_functions[0].state_dict())
                 crit        = lambda y_hat, y: torch.mean(pinball_loss(y_hat, y))
                 if self.quantile_function_setting['optimizer'] == 'sgd':
-                    optim = torch.optim.SGD(model.parameters(), lr=self.quantile_function_setting['learning_rate'], weight_decay=self.quantile_function_setting['ridge'])
+                    optim = torch.optim.SGD(model.parameters(), lr=self.quantile_function_setting['learning_rate'], momentum=0.9, weight_decay=self.quantile_function_setting['ridge'])
                 elif self.quantile_function_setting['optimizer'] == 'adam':
                     optim = torch.optim.Adam(model.parameters(), lr=self.quantile_function_setting['learning_rate'], weight_decay=self.quantile_function_setting['ridge'])
+                best_loss = float("inf")
+                patience_counter = 0
                 for epoch in range(self.quantile_function_setting['n_epochs']):
+                    model.train()
+                    epoch_loss = 0
                     for X_batch, y_batch in dataloader:
                         optim.zero_grad()
                         y_hat   = model(X_batch)
                         loss    = crit(y_hat, y_batch)
                         loss.backward()
                         optim.step()
+                        epoch_loss += loss.item() * X_batch.size(0)
+                    epoch_loss /= len(dataloader.dataset)
+                    if epoch_loss < best_loss - 10**(-4):
+                        best_loss = epoch_loss
+                        patience_counter = 0
+                    else:
+                        patience_counter += 1
+                    if patience_counter > self.quantile_function_setting['patience']:
+                        break
                 self.quantile_functions.insert(0, model)
 
     def generate_paths(self, risk_factors_test_paths):
@@ -281,10 +303,10 @@ class NeuralQuantileRegression(ForwardInitialMarginModel):
         for i in range(len(self.time_grid.grid)):
             if (i<len(self.time_grid.grid)-1) or (len(self.quantile_functions)==len(self.time_grid.grid)):
                 X       = torch.tensor(risk_factors_test_paths[:, i].reshape(-1, 1), dtype=torch.float32)
-                X       = (X - X.mean()) / X.std() if X.std() > 0 else X # normalizing the input
+                X       = self.scalers[i].transform(X)
                 ones    = torch.ones(X.size(0), 1, dtype=torch.float32)
                 X       = torch.cat((ones, X), dim=1)
-                varhat  = self.quantile_functions[i](X).detach().numpy().reshape(-1)
+                varhat  = self.scalers_pred[i].inverse_transform(self.quantile_functions[i](X).detach().numpy()).reshape(-1)
                 paths[:, i] = np.maximum(varhat, 0)
         return paths
     

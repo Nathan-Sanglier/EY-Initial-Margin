@@ -45,8 +45,10 @@ class RawMomentsRegressor:
         if (method == 'LR') or (method == 'HR') or (method == 'GLM'):
             X_train = get_basis(x_train, self.setting['basis_type'], self.setting['order'])
             for j in range(ind_start, self.order_moms+1):
+                change_GLM = False
                 if (j%2 != 0) and (method == 'GLM'):
                     model = LinearRegression(fit_intercept=False)
+                    change_GLM = True
                     model.fit(X_train, y_train[:, j-1])
                 elif (method == 'LR') and (self.setting['ridge']>0):
                     model = Ridge(alpha=self.setting['ridge'], fit_intercept=False)
@@ -55,11 +57,19 @@ class RawMomentsRegressor:
                 elif method == 'HR':
                     model = HuberRegressor(epsilon=self.setting['epsilon'], alpha=self.setting['ridge'] ,fit_intercept=False)
                 elif (method == 'GLM') and (self.setting['ridge']>0):
-                    model = sm.GLM(y_train[:, j-1], X_train, family=sm.families.Gaussian(link=sm.families.links.Log())).fit_regularized(method='elastic_net', alpha=self.setting['ridge'], L1_wt=0)
+                    try:
+                        model = sm.GLM(y_train[:, j-1], X_train, family=sm.families.Gaussian(link=sm.families.links.Log())).fit_regularized(method='elastic_net', alpha=self.setting['ridge'], L1_wt=0)
+                    except ValueError:
+                        model = Ridge(alpha=self.setting['ridge'], fit_intercept=False)
+                        change_GLM = True
                 elif method == 'GLM':
-                    model = sm.GLM(y_train[:, j-1], X_train, family=sm.families.Gaussian(link=sm.families.links.Log())).fit()
+                    try:
+                        model = sm.GLM(y_train[:, j-1], X_train, family=sm.families.Gaussian(link=sm.families.links.Log())).fit()
+                    except ValueError:
+                        model = LinearRegression(fit_intercept=False)
+                        change_GLM = True
                 
-                if method != 'GLM':
+                if (method != 'GLM') or change_GLM:
                     model.fit(X_train, y_train[:, j-1])
 
                 self.models.append(model)

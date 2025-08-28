@@ -32,7 +32,7 @@ class TimeGrid:
 
 def get_mtmdiff(mtm_paths, mpor, time_grid):
     '''
-    Computes $V_{(t+\delta) \wedge T} - V_t$ for each path and at each timestep.
+    Computes $V_{(t+delta) wedge T} - V_t$ for each path and at each timestep.
     '''
     inds_offset     = np.clip(np.arange(time_grid.num_steps+1) + time_grid.find_index(mpor), 0, time_grid.num_steps)
     mtmdiff_paths   = mtm_paths[:, inds_offset] - mtm_paths
@@ -199,6 +199,11 @@ def get_quantile_normal(mu1rawhat, mu2hat, alpha):
     return quanthat
 
 
+def get_pdf_normal(mu1rawhat, mu2hat, mtmdiff_pdf):
+    pdfhat = norm.pdf(mtmdiff_pdf, loc=mu1rawhat.reshape(-1, 1), scale=np.sqrt(mu2hat.reshape(-1, 1)))
+    return pdfhat
+
+
 def get_quantile_johnson(jparamshat, jtypehat, alpha):
     '''
     Quantile at level alpha of Johnson distribution.
@@ -221,9 +226,26 @@ def get_quantile_johnson(jparamshat, jtypehat, alpha):
     return quanthat, maskhat
 
 
+def get_pdf_johnson(jparamshat, jtypehat, mtmdiff_pdf):
+    jtypes_map  = {'SL': 1, 'SU': 2, 'SB': 3, 'SN': 4, 'ST': 5}
+    pdfhat      = np.zeros((jparamshat.shape[0], len(mtmdiff_pdf)))
+    for i in range(jparamshat.shape[0]):
+        gamma_, delta_, xi_, lambda_    = jparamshat[i, 0], jparamshat[i, 1], jparamshat[i, 2], jparamshat[i, 3]
+        absdelta_, abslambda_           = np.abs(delta_), np.abs(lambda_)
+        if jtypehat[i] == jtypes_map['SL']:
+            pdfhat[i, :] = lognorm.pdf(mtmdiff_pdf, s=1/absdelta_, loc=xi_, scale=lambda_*exp(-gamma_/delta_))
+        elif jtypehat[i] == jtypes_map['SU']:
+            pdfhat[i, :] = johnsonsu.pdf(mtmdiff_pdf, a=gamma_, b=delta_, loc=xi_, scale=lambda_)
+        elif (jtypehat[i]==jtypes_map['SB']) or (jtypehat[i]==jtypes_map['ST']):
+            pdfhat[i, :] = johnsonsb.pdf(mtmdiff_pdf, a=gamma_, b=delta_, loc=xi_, scale=lambda_)
+        elif jtypehat[i] == jtypes_map['SN']:
+            pdfhat[i, :] = norm.pdf(mtmdiff_pdf, loc=(xi_-gamma_*lambda_)/delta_, scale=abslambda_/absdelta_)
+    return pdfhat
+
+
 def get_mtmdiff_nmc(num_inner_paths, pricing_engine, risk_factors_vals, mtm_vals, mpor, tref):
     '''
-    Makes nested MC simulations at a given time t for several risk factors values, diffusing risk factors and portfolio price from t to $(t+mpor) \wedge T$.
+    Makes nested MC simulations at a given time t for several risk factors values, diffusing risk factors and portfolio price from t to $(t+mpor) wedge T$.
     '''
     num_paths       = len(risk_factors_vals)
     mtmdiff         = np.zeros((num_paths, num_inner_paths))
@@ -245,3 +267,13 @@ def get_mtmdiff_nmc(num_inner_paths, pricing_engine, risk_factors_vals, mtm_vals
     pricing_engine.pricing_model.set_spot(init_spot)
 
     return mtmdiff
+
+
+def seconds_to_minutes(seconds):
+    time_mn, time_sec = divmod(seconds, 60)
+    if time_sec==0:
+        return f"{time_mn}mn"
+    elif time_mn==0:
+        return f"{round(time_sec)}s"
+    else:
+        return f"{int(time_mn)}mn{round(time_sec)}s"
