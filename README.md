@@ -1,7 +1,7 @@
 # Modeling Forward Initial Margin and Counterparty Risk in Uncleared Derivatives
 
 ## 📘 Overview 
-This project relates to my internship in the Quantitative Advisory Services (QAS) team of EY France, on the modeling of forward initial margin (IM) in uncleared derivatives that arises in counterparty credit risk topics. More precisely, it contains all the numerical results (and other stuff) of the two case studies that are presented in my [internship report](report.pdf). A short summary of my work, used for my internship defense, is available in the file (🔴mettre le lien🔴). The code has been done in `python`, using `jupyter` notebooks for the analysis and `.py` files for the forward IM engines.
+This project relates to my internship in the Quantitative Advisory Services (QAS) team of EY France, on the modeling of forward initial margin (IM) in uncleared derivatives that arises in counterparty credit risk topics. More precisely, it contains all the numerical results (and other stuff) of the two case studies that are presented in my [internship report](report.pdf). A short summary of my work, used for my internship defense, is available in the file (🔴mettre le lien🔴). The code has been done in `python`, using `jupyter` notebooks for the analysis and `.py` files for the forward IM engines. You can replicate the results by setting-up a virtual `pip` environment with `requirements.txt`.
 
 ## 🚀 Main Features
 - 🟢 [`tutorial.ipynb`](tutorial.ipynb) : Notebook that shows how to train and evaluate a given forward IM model for the two case studies, relying on object-oriented programming.
