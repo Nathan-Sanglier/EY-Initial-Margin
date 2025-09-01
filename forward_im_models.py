@@ -256,15 +256,15 @@ class NeuralQuantileRegression(ForwardInitialMarginModel):
         pinball_loss = lambda yhat, y: torch.maximum(y - yhat, torch.tensor(0.0))/(1-self.level) + yhat
         for i in range(len(self.time_grid.grid)-1, -1, -1): # from last to first timestep to leverage transfer learning
             if (i<len(self.time_grid.grid)-1) or (len(self.time_grid.grid) < mtm_train_paths.shape[1]):
-                X           = torch.tensor(risk_factors_train_paths[:, i].reshape(-1, 1), dtype=torch.float32)
-                scaler      = StandardScaler()
-                X           = scaler.fit_transform(X, with_std=(X.std() > 0))
+                scaler      = StandardScaler(with_std=(risk_factors_train_paths[:, i].std() > 0))
+                X           = scaler.fit_transform(risk_factors_train_paths[:, i].reshape(-1, 1))
+                X           = torch.tensor(X, dtype=torch.float32)
                 self.scalers.insert(0, scaler)
-                ones        = torch.ones(X.size(0), 1, dtype=torch.float32)
+                ones        = torch.ones(len(risk_factors_train_paths[:, i]), 1, dtype=torch.float32)
                 X           = torch.cat((ones, X), dim=1)
-                y           = torch.tensor(mtmdiff_train_paths[:, i].reshape(-1, 1), dtype=torch.float32)
-                scaler_pred = StandardScaler()
-                y           = scaler_pred.fit_transform(y, with_std=(y.std() > 0))
+                scaler_pred = StandardScaler(with_std=(mtmdiff_train_paths[:, i].std() > 0))
+                y           = scaler_pred.fit_transform(mtmdiff_train_paths[:, i].reshape(-1, 1))
+                y           = torch.tensor(y, dtype=torch.float32)
                 self.scalers_pred.insert(0, scaler_pred)
                 dataset     = TensorDataset(X, y)
                 dataloader  = DataLoader(dataset, batch_size=self.quantile_function_setting['batch_size'], shuffle=True)
@@ -302,9 +302,9 @@ class NeuralQuantileRegression(ForwardInitialMarginModel):
         paths = np.zeros((risk_factors_test_paths.shape[0], self.time_grid.num_steps+1))
         for i in range(len(self.time_grid.grid)):
             if (i<len(self.time_grid.grid)-1) or (len(self.quantile_functions)==len(self.time_grid.grid)):
-                X       = torch.tensor(risk_factors_test_paths[:, i].reshape(-1, 1), dtype=torch.float32)
-                X       = self.scalers[i].transform(X)
-                ones    = torch.ones(X.size(0), 1, dtype=torch.float32)
+                X       = self.scalers[i].transform(risk_factors_test_paths[:, i].reshape(-1, 1))
+                X       = torch.tensor(X, dtype=torch.float32)
+                ones    = torch.ones(len(risk_factors_test_paths[:, i]), 1, dtype=torch.float32)
                 X       = torch.cat((ones, X), dim=1)
                 varhat  = self.scalers_pred[i].inverse_transform(self.quantile_functions[i](X).detach().numpy()).reshape(-1)
                 paths[:, i] = np.maximum(varhat, 0)
