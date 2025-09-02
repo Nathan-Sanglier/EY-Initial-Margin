@@ -1,3 +1,4 @@
+-e .
 asttokens==3.0.0
 attrs==25.3.0
 colorama==0.4.6

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Backend utilities for analyses"
+authors = [
+    { name="Nathan Sanglier", email="Nathan.Sanglier@fr.ey.com" }
+]
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
