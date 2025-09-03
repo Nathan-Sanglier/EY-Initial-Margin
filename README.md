@@ -15,7 +15,7 @@ This project relates to my internship in the Quantitative Advisory Services (QAS
 ## 📑 Other Features
 
 - 🟡 [`others`](others/) : 
-    - 🟡 [`stylized_graphs.ipynb`](others/stylized_graphs.ipynb) : Code for stylized graphs that are presented in the report, not of much interest for the reader of the report.
+    - [`stylized_graphs.ipynb`](others/stylized_graphs.ipynb) : Code for stylized graphs that are presented in the report, not of much interest for the reader of the report.
 
 - 🟡 [`ressources`](ressources/) : Folder containing several research papers on forward IM, counterparty credit risk, quantile regression, etc.
 
